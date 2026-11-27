@@ -1,0 +1,27 @@
+# .NET
+bin/
+obj/
+TestResults/
+
+# Terraform (commit .terraform.lock.hcl, never state or real variable files)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+*.tfvars
+!*.tfvars.example
+crash.log
+
+# Secrets and local config
+kubeconfig
+*.kubeconfig
+.env
+*.pfx
+*.pem
+
+# Editors
+.vs/
+.vscode/
+.idea/
+*.user
