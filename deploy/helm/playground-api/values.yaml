@@ -1,0 +1,26 @@
+replicaCount: 2
+
+image:
+  repository: playground-api
+  tag: local
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+serviceAccount:
+  name: playground-api
+
+# Azure only: set to the app_identity_client_id Terraform output.
+workloadIdentity:
+  clientId: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

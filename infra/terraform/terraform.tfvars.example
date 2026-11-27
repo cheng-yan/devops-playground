@@ -1,0 +1,2 @@
+# Copy to terraform.tfvars (git-ignored) and put in your own public IP.
+admin_ip_ranges = ["203.0.113.10/32"]

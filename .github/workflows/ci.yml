@@ -1,0 +1,99 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet test Playground.slnx --configuration Release
+
+  iac:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - name: Terraform format
+        run: terraform fmt -check -recursive -diff infra
+      - name: Terraform validate
+        working-directory: infra/terraform
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+      - name: Helm lint
+        run: helm lint --strict deploy/helm/playground-api
+      - name: Trivy IaC scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  deploy-to-kind:
+    needs: [test, iac]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build --tag "playground-api:$IMAGE_TAG" .
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: playground-api:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: "true"
+          exit-code: "1"
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          cluster_name: playground
+          config: deploy/kind/cluster.yaml
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+      - name: Deploy with Helm
+        run: |
+          kind load docker-image "playground-api:$IMAGE_TAG" --name playground
+          helm upgrade --install playground-api deploy/helm/playground-api \
+            --namespace playground --create-namespace \
+            --set-string image.tag="$IMAGE_TAG" \
+            --wait --timeout 3m
+      - name: Smoke test
+        run: |
+          kubectl --namespace playground port-forward service/playground-api 8080:80 &
+          curl --fail --silent --show-error --retry 10 --retry-delay 2 --retry-all-errors \
+            http://localhost:8080/health/ready
+          echo
+          curl --fail --silent --show-error http://localhost:8080/api/items
+      - name: Show cluster state on failure
+        if: failure()
+        run: |
+          kubectl --namespace playground get all
+          kubectl --namespace playground describe pods
+          kubectl --namespace playground logs --selector app.kubernetes.io/name=playground-api --tail=100
